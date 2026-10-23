@@ -11,7 +11,7 @@ function buildUpstreamHeaders(targetUrl, customReferer, reqHeaders) {
   try {
     targetUrlObj = new URL(targetUrl);
   } catch (e) {
-    targetUrlObj = { origin: '', hostname: '' };
+    targetUrlObj = { origin: '', hostname: '', pathname: '' };
   }
 
   const headers = {
@@ -19,10 +19,22 @@ function buildUpstreamHeaders(targetUrl, customReferer, reqHeaders) {
     'Accept': '*/*'
   };
 
-  // If URL belongs to ClassX or related student portals, use the official portal Referer & Origin
+  // Extract tenant name from path like /videos/ignite247-data/...
+  const match = (targetUrlObj.pathname || '').match(/\/videos\/([a-zA-Z0-9_-]+)-data\//i);
+  const tenant = match ? match[1] : '';
+
+  // If URL belongs to ClassX or related student portals, use the exact tenant portal Referer & Origin
   if (targetUrlObj.hostname && (targetUrlObj.hostname.includes('classx.co.in') || targetUrlObj.hostname.includes('classx'))) {
-    headers['Referer'] = customReferer || 'https://classx.co.in/';
-    headers['Origin'] = 'https://classx.co.in';
+    if (customReferer) {
+      headers['Referer'] = customReferer;
+      try { headers['Origin'] = new URL(customReferer).origin; } catch (e) {}
+    } else if (tenant) {
+      headers['Referer'] = `https://${tenant}.classx.co.in/`;
+      headers['Origin'] = `https://${tenant}.classx.co.in`;
+    } else {
+      headers['Referer'] = 'https://classx.co.in/';
+      headers['Origin'] = 'https://classx.co.in';
+    }
   } else if (customReferer) {
     headers['Referer'] = customReferer;
   }

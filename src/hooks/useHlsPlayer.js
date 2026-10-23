@@ -10,6 +10,7 @@ export function useHlsPlayer(videoRef) {
   const retryCountRef = useRef(0);
   const loadingTimeoutRef = useRef(null);
   const isProxyActiveRef = useRef(false);
+  const forceProxyRef = useRef(false);
   const maxRetries = 2; // prevent infinite loops on failing streams
 
   const [status, setStatus] = useState('ready'); // 'ready' | 'loading' | 'playing' | 'paused' | 'error'
@@ -109,6 +110,7 @@ export function useHlsPlayer(videoRef) {
 
     // Clean up previous playback session completely
     cleanup();
+    forceProxyRef.current = Boolean(forceProxy);
     setCurrentUrl(trimmedUrl);
     setError(null);
     setStatus('loading');
@@ -145,7 +147,7 @@ export function useHlsPlayer(videoRef) {
       // Safeguard: 12-second loading timeout watchdog
       loadingTimeoutRef.current = setTimeout(() => {
         if (!hlsRef.current) return;
-        if (!isProxyActiveRef.current && isHttp) {
+        if (!isProxyActiveRef.current && isHttp && forceProxyRef.current) {
           console.warn('[StreamPlay] Direct stream timed out. Auto-switching to local proxy...');
           isProxyActiveRef.current = true;
           retryCountRef.current = 0;
@@ -199,8 +201,8 @@ export function useHlsPlayer(videoRef) {
           case Hls.ErrorTypes.NETWORK_ERROR: {
             const httpStatus = data.response?.code;
 
-            // If direct stream hit CORS restriction or failed to load manifest, try proxy automatically!
-            if (!isProxyActiveRef.current && isHttp && (httpStatus === 0 || !httpStatus || data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR)) {
+            // If direct stream hit CORS restriction or failed to load manifest, try proxy automatically if enabled
+            if (!isProxyActiveRef.current && isHttp && forceProxyRef.current && (httpStatus === 0 || !httpStatus || data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR)) {
               console.warn('[StreamPlay] Direct stream failed (CORS/Network). Switching automatically to local proxy...');
               isProxyActiveRef.current = true;
               retryCountRef.current = 0;
