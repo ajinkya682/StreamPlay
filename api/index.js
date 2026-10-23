@@ -1,3 +1,8 @@
+// Suppress internal runtime deprecation warnings so Vercel doesn't mark stderr as an Error
+if (typeof process !== 'undefined') {
+  process.noDeprecation = true;
+}
+
 import { rewriteM3u8Content } from '../lib/rewriter.js';
 import { saveCustomPlaylist, getCustomPlaylist } from '../lib/store.js';
 
