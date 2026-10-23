@@ -2,8 +2,8 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     {
-      "source": "/api/proxy/custom/:id.m3u8",
-      "destination": "/api/proxy/custom?id=:id"
+      "source": "/api/:path*",
+      "destination": "/api/index.js"
     },
     {
       "source": "/(.*)",

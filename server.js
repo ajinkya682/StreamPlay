@@ -7,7 +7,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 
-import { rewriteM3u8Content } from './api/_utils/rewriter.js';
+import { rewriteM3u8Content } from './lib/rewriter.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
