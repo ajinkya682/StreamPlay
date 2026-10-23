@@ -37,6 +37,39 @@ app.get('/api/proxy/health', (req, res) => {
   res.json({ ok: true, activePlaylists: customPlaylists.size });
 });
 
+function buildUpstreamHeaders(targetUrl, customReferer, reqHeaders) {
+  let targetUrlObj;
+  try {
+    targetUrlObj = new URL(targetUrl);
+  } catch (e) {
+    targetUrlObj = { origin: '', hostname: '' };
+  }
+
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': '*/*'
+  };
+
+  if (targetUrlObj.hostname && (targetUrlObj.hostname.includes('classx.co.in') || targetUrlObj.hostname.includes('classx'))) {
+    headers['Referer'] = customReferer || 'https://classx.co.in/';
+    headers['Origin'] = 'https://classx.co.in';
+  } else if (customReferer) {
+    headers['Referer'] = customReferer;
+  }
+
+  if (reqHeaders?.['range']) {
+    headers['Range'] = reqHeaders['range'];
+  }
+  if (reqHeaders?.['authorization']) {
+    headers['Authorization'] = reqHeaders['authorization'];
+  }
+  if (reqHeaders?.['cookie']) {
+    headers['Cookie'] = reqHeaders['cookie'];
+  }
+
+  return headers;
+}
+
 // Proxy .m3u8 playlists, rewrite relative segments, bypass CORS
 app.get('/api/proxy/playlist', async (req, res) => {
   const targetUrl = req.query.url;
@@ -45,14 +78,10 @@ app.get('/api/proxy/playlist', async (req, res) => {
   }
 
   try {
-    const targetOrigin = new URL(targetUrl).origin;
+    const headers = buildUpstreamHeaders(targetUrl, req.query.referer, req.headers);
     const upstreamRes = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': req.query.referer || `${targetOrigin}/`,
-        'Origin': targetOrigin,
-        'Accept': '*/*'
-      }
+      headers,
+      redirect: 'follow'
     });
 
     if (!upstreamRes.ok) {
@@ -84,18 +113,7 @@ app.get('/api/proxy/segment', async (req, res) => {
   }
 
   try {
-    const targetOrigin = new URL(targetUrl).origin;
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': req.query.referer || `${targetOrigin}/`,
-      'Origin': targetOrigin,
-      'Accept': '*/*'
-    };
-
-    if (req.headers.range) {
-      headers['Range'] = req.headers.range;
-    }
-
+    const headers = buildUpstreamHeaders(targetUrl, req.query.referer, req.headers);
     const upstreamRes = await fetch(targetUrl, {
       method: 'GET',
       headers,

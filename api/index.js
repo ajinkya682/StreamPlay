@@ -1,6 +1,40 @@
 import { rewriteM3u8Content } from '../lib/rewriter.js';
 import { saveCustomPlaylist, getCustomPlaylist } from '../lib/store.js';
 
+function buildUpstreamHeaders(targetUrl, customReferer, reqHeaders) {
+  let targetUrlObj;
+  try {
+    targetUrlObj = new URL(targetUrl);
+  } catch (e) {
+    targetUrlObj = { origin: '', hostname: '' };
+  }
+
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': '*/*'
+  };
+
+  // If URL belongs to ClassX or related student portals, use the official portal Referer & Origin
+  if (targetUrlObj.hostname && (targetUrlObj.hostname.includes('classx.co.in') || targetUrlObj.hostname.includes('classx'))) {
+    headers['Referer'] = customReferer || 'https://classx.co.in/';
+    headers['Origin'] = 'https://classx.co.in';
+  } else if (customReferer) {
+    headers['Referer'] = customReferer;
+  }
+
+  if (reqHeaders?.['range']) {
+    headers['Range'] = reqHeaders['range'];
+  }
+  if (reqHeaders?.['authorization']) {
+    headers['Authorization'] = reqHeaders['authorization'];
+  }
+  if (reqHeaders?.['cookie']) {
+    headers['Cookie'] = reqHeaders['cookie'];
+  }
+
+  return headers;
+}
+
 export default async function handler(req, res) {
   // Global CORS headers for cross-origin player access
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -36,18 +70,12 @@ export default async function handler(req, res) {
     }
 
     try {
-      const targetUrlObj = new URL(targetUrl);
-      const targetOrigin = targetUrlObj.origin;
-      const referer = searchParams.get('referer') || req.query?.referer || `${targetOrigin}/`;
+      const customReferer = searchParams.get('referer') || req.query?.referer;
+      const headers = buildUpstreamHeaders(targetUrl, customReferer, req.headers);
 
       const upstreamRes = await fetch(targetUrl, {
         method: 'GET',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Referer': referer,
-          'Origin': targetOrigin,
-          'Accept': '*/*'
-        },
+        headers,
         redirect: 'follow'
       });
 
@@ -79,20 +107,8 @@ export default async function handler(req, res) {
     }
 
     try {
-      const targetUrlObj = new URL(targetUrl);
-      const targetOrigin = targetUrlObj.origin;
-      const referer = searchParams.get('referer') || req.query?.referer || `${targetOrigin}/`;
-
-      const headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': referer,
-        'Origin': targetOrigin,
-        'Accept': '*/*'
-      };
-
-      if (req.headers?.range) {
-        headers['Range'] = req.headers.range;
-      }
+      const customReferer = searchParams.get('referer') || req.query?.referer;
+      const headers = buildUpstreamHeaders(targetUrl, customReferer, req.headers);
 
       const upstreamRes = await fetch(targetUrl, {
         method: req.method === 'HEAD' ? 'HEAD' : 'GET',
