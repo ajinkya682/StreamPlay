@@ -72,7 +72,12 @@ export function RecorderControls({ videoRef, currentUrl, isPlaying }) {
   };
 
   // Reveal and highlight the exact file in macOS Finder
+  // Reveal and highlight the exact file in macOS Finder (or notify about Downloads in cloud mode)
   const revealInFinder = async (filename) => {
+    if (!ffmpegAvailable) {
+      setStatusMessage(`📂 "${filename}" is saved in your browser's default Downloads folder.`);
+      return;
+    }
     try {
       await fetch('/api/record/reveal', {
         method: 'POST',
@@ -87,6 +92,10 @@ export function RecorderControls({ videoRef, currentUrl, isPlaying }) {
 
   // Open the general Downloads folder
   const openDownloadsFolder = async () => {
+    if (!ffmpegAvailable) {
+      setStatusMessage('📂 Recorded videos are saved directly into your computer’s default Downloads folder.');
+      return;
+    }
     try {
       await fetch('/api/record/open-downloads', { method: 'POST' });
       setStatusMessage('📂 Opened your Mac Downloads folder in Finder');
@@ -155,7 +164,36 @@ export function RecorderControls({ videoRef, currentUrl, isPlaying }) {
         const blob = new Blob(chunksRef.current, { type: mimeType });
         const now = new Date();
         const dateStr = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const fallbackName = `StreamPlay_Recording_${dateStr}.mp4`;
+        const fallbackName = `StreamPlay_Recording_${dateStr}.${fileExt}`;
+
+        // In cloud / online mode, trigger instant direct download to user's browser
+        if (!ffmpegAvailable) {
+          const localUrl = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = localUrl;
+          a.download = fallbackName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+
+          setLastSavedFile({
+            filename: fallbackName,
+            downloadUrl: localUrl
+          });
+          setSavedRecordings((prev) => [
+            {
+              filename: fallbackName,
+              sizeBytes: blob.size,
+              folder: 'Downloads',
+              modifiedAt: new Date().toISOString(),
+              localBlobUrl: localUrl
+            },
+            ...prev
+          ]);
+          setStatusMessage(`✅ Saved ${fallbackName} (${formatBytes(blob.size)}) directly to your Downloads folder!`);
+          setIsRecording(false);
+          return;
+        }
 
         setStatusMessage('⏳ Converting and saving MP4 to your Mac Downloads folder...');
 
@@ -180,11 +218,28 @@ export function RecorderControls({ videoRef, currentUrl, isPlaying }) {
         } catch (e) {
           // Fallback to local blob download
           const localUrl = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = localUrl;
+          a.download = fallbackName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+
           setLastSavedFile({
             filename: fallbackName,
             downloadUrl: localUrl
           });
-          setStatusMessage(`✅ Recording complete (${formatBytes(blob.size)}). Click "Download .mp4 File" below.`);
+          setSavedRecordings((prev) => [
+            {
+              filename: fallbackName,
+              sizeBytes: blob.size,
+              folder: 'Downloads',
+              modifiedAt: new Date().toISOString(),
+              localBlobUrl: localUrl
+            },
+            ...prev
+          ]);
+          setStatusMessage(`✅ Recording complete (${formatBytes(blob.size)}). Saved to your Downloads folder.`);
         }
 
         setIsRecording(false);
@@ -213,6 +268,13 @@ export function RecorderControls({ videoRef, currentUrl, isPlaying }) {
   const startBackendRecording = async () => {
     if (!currentUrl) {
       setStatusMessage('Please load and play an HLS stream URL first.');
+      return;
+    }
+
+    if (!ffmpegAvailable) {
+      setStatusMessage('Notice: FFmpeg local mode requires running StreamPlay on Mac/PC. Switched to In-Browser clean video capture.');
+      setRecordMode('browser');
+      startBrowserRecording();
       return;
     }
 
@@ -305,14 +367,33 @@ export function RecorderControls({ videoRef, currentUrl, isPlaying }) {
 
         {/* Mode Selector & Open Folder */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className="control-btn"
-            onClick={openDownloadsFolder}
-            title="Open your Mac's Downloads folder in Finder"
-          >
-            📂 Open Downloads Folder
-          </button>
+          {ffmpegAvailable ? (
+            <button
+              type="button"
+              className="control-btn"
+              onClick={openDownloadsFolder}
+              title="Open your Mac's Downloads folder in Finder"
+            >
+              📂 Open Downloads Folder
+            </button>
+          ) : (
+            <span
+              style={{
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                padding: '4px 10px',
+                borderRadius: '6px',
+                background: 'rgba(56, 189, 248, 0.12)',
+                color: '#38bdf8',
+                border: '1px solid rgba(56, 189, 248, 0.25)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4
+              }}
+            >
+              ☁️ Cloud / Vercel Online
+            </span>
+          )}
 
           <div className="recorder-mode-tabs">
             <button
@@ -320,7 +401,7 @@ export function RecorderControls({ videoRef, currentUrl, isPlaying }) {
               className={`mode-tab-btn ${recordMode === 'browser' ? 'active' : ''}`}
               onClick={() => !isRecording && setRecordMode('browser')}
               disabled={isRecording}
-              title="Records playing video in browser without capturing screen or mouse"
+              title="Records playing video in browser directly to your Downloads folder"
             >
               In-Browser Video Capture
             </button>
@@ -329,9 +410,9 @@ export function RecorderControls({ videoRef, currentUrl, isPlaying }) {
               className={`mode-tab-btn ${recordMode === 'backend' ? 'active' : ''}`}
               onClick={() => !isRecording && setRecordMode('backend')}
               disabled={isRecording || !ffmpegAvailable}
-              title="Saves direct HLS stream to MP4 via local FFmpeg"
+              title={ffmpegAvailable ? "Saves direct HLS stream to MP4 via local FFmpeg" : "FFmpeg mode is available when running locally on Mac/PC with local server"}
             >
-              FFmpeg Direct MP4
+              FFmpeg Direct MP4 {!ffmpegAvailable ? '(Local only)' : ''}
             </button>
           </div>
         </div>
@@ -411,7 +492,11 @@ export function RecorderControls({ videoRef, currentUrl, isPlaying }) {
               🎬 Video Ready: {lastSavedFile.filename}
             </div>
             <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: 2 }}>
-              Saved in your Mac Downloads folder! Click <strong>Open in Finder</strong> to highlight it.
+              {ffmpegAvailable ? (
+                <>Saved in your Mac Downloads folder! Click <strong>Open in Finder</strong> to highlight it.</>
+              ) : (
+                <>Downloaded directly to your browser's Downloads folder.</>
+              )}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -421,16 +506,18 @@ export function RecorderControls({ videoRef, currentUrl, isPlaying }) {
               className="btn btn-primary"
               style={{ fontSize: '0.8125rem', padding: '6px 14px' }}
             >
-              ⬇ Download .mp4 File
+              ⬇ Download Video File
             </a>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => revealInFinder(lastSavedFile.filename)}
-              style={{ fontSize: '0.8125rem', padding: '6px 14px' }}
-            >
-              📂 Open in Finder
-            </button>
+            {ffmpegAvailable && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => revealInFinder(lastSavedFile.filename)}
+                style={{ fontSize: '0.8125rem', padding: '6px 14px' }}
+              >
+                📂 Open in Finder
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -446,14 +533,16 @@ export function RecorderControls({ videoRef, currentUrl, isPlaying }) {
       {savedRecordings.length > 0 && (
         <div className="saved-recordings-section">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span className="saved-recordings-title">Saved Recordings in Downloads (~/Downloads/)</span>
-            <button
-              type="button"
-              className="text-btn"
-              onClick={openDownloadsFolder}
-            >
-              📂 Open Downloads Folder
-            </button>
+            <span className="saved-recordings-title">Saved Recordings</span>
+            {ffmpegAvailable && (
+              <button
+                type="button"
+                className="text-btn"
+                onClick={openDownloadsFolder}
+              >
+                📂 Open Downloads Folder
+              </button>
+            )}
           </div>
           <div className="saved-recordings-list">
             {savedRecordings.map((rec) => (
@@ -463,19 +552,21 @@ export function RecorderControls({ videoRef, currentUrl, isPlaying }) {
                   <span className="saved-recording-size">{formatBytes(rec.sizeBytes)}</span>
                 </div>
                 <div className="saved-recording-actions">
-                  <button
-                    type="button"
-                    className="control-btn"
-                    onClick={() => revealInFinder(rec.filename)}
-                    title="Highlight file in macOS Finder"
-                  >
-                    📂 Show in Finder
-                  </button>
+                  {ffmpegAvailable && (
+                    <button
+                      type="button"
+                      className="control-btn"
+                      onClick={() => revealInFinder(rec.filename)}
+                      title="Highlight file in macOS Finder"
+                    >
+                      📂 Show in Finder
+                    </button>
+                  )}
                   <a
-                    href={`/api/record/download/${rec.filename}`}
+                    href={rec.localBlobUrl || `/api/record/download/${rec.filename}`}
                     className="control-btn"
                     download={rec.filename}
-                    title="Download .mp4 to computer"
+                    title="Download video to computer"
                   >
                     ⬇ Download
                   </a>

@@ -7,6 +7,8 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 
+import { rewriteM3u8Content } from './api/_utils/rewriter.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -29,55 +31,6 @@ app.use(express.json());
 
 // --- In-Memory Store for pasted playlists ---
 const customPlaylists = new Map();
-
-function rewriteM3u8Content(content, baseUrl) {
-  let parentUrlObj;
-  try {
-    parentUrlObj = new URL(baseUrl);
-  } catch (e) {
-    parentUrlObj = { search: '', origin: '' };
-  }
-
-  const lines = content.split('\n');
-  const rewritten = lines.map((line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return line;
-
-    // Process tags with URI="..." (e.g. #EXT-X-KEY, #EXT-X-MAP, #EXT-X-MEDIA)
-    if (trimmed.startsWith('#')) {
-      return line.replace(/URI="([^"]+)"/g, (match, uri) => {
-        try {
-          const abs = new URL(uri, baseUrl);
-          if (!abs.search && parentUrlObj.search) {
-            abs.search = parentUrlObj.search;
-          }
-          const pathname = abs.pathname.toLowerCase();
-          const proxyPath = pathname.endsWith('.m3u8') ? '/api/proxy/playlist' : '/api/proxy/segment';
-          return `URI="${proxyPath}?url=${encodeURIComponent(abs.toString())}"`;
-        } catch (e) {
-          return match;
-        }
-      });
-    }
-
-    // Process media segment or sub-playlist URL line
-    try {
-      const abs = new URL(trimmed, baseUrl);
-      if (!abs.search && parentUrlObj.search) {
-        abs.search = parentUrlObj.search;
-      }
-      const pathname = abs.pathname.toLowerCase();
-      if (pathname.endsWith('.m3u8')) {
-        return `/api/proxy/playlist?url=${encodeURIComponent(abs.toString())}`;
-      }
-      return `/api/proxy/segment?url=${encodeURIComponent(abs.toString())}`;
-    } catch (e) {
-      return line;
-    }
-  });
-
-  return rewritten.join('\n');
-}
 
 // Health check
 app.get('/api/proxy/health', (req, res) => {
@@ -111,9 +64,10 @@ app.get('/api/proxy/playlist', async (req, res) => {
     }
 
     const playlistText = await upstreamRes.text();
-    const rewritten = rewriteM3u8Content(playlistText, targetUrl);
+    const finalBaseUrl = upstreamRes.url || targetUrl;
+    const rewritten = rewriteM3u8Content(playlistText, finalBaseUrl);
 
-    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.send(rewritten);
@@ -144,7 +98,8 @@ app.get('/api/proxy/segment', async (req, res) => {
 
     const upstreamRes = await fetch(targetUrl, {
       method: 'GET',
-      headers
+      headers,
+      redirect: 'follow'
     });
 
     res.status(upstreamRes.status);
@@ -152,6 +107,7 @@ app.get('/api/proxy/segment', async (req, res) => {
     res.setHeader('Content-Type', contentType);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
 
     const contentLength = upstreamRes.headers.get('content-length');
     if (contentLength) res.setHeader('Content-Length', contentLength);
@@ -159,24 +115,12 @@ app.get('/api/proxy/segment', async (req, res) => {
     const contentRange = upstreamRes.headers.get('content-range');
     if (contentRange) res.setHeader('Content-Range', contentRange);
 
-    const acceptRanges = upstreamRes.headers.get('accept-ranges');
-    if (acceptRanges) res.setHeader('Accept-Ranges', acceptRanges);
+    const acceptRanges = upstreamRes.headers.get('accept-ranges') || 'bytes';
+    res.setHeader('Accept-Ranges', acceptRanges);
 
-    if (upstreamRes.body) {
-      const reader = upstreamRes.body.getReader();
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          res.write(value);
-        }
-        res.end();
-      } catch (pipeErr) {
-        res.end();
-      }
-    } else {
-      res.end();
-    }
+    const arrayBuffer = await upstreamRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    res.end(buffer);
   } catch (err) {
     if (!res.headersSent) {
       res.status(502).send(`Proxy segment failed: ${err.message}`);
