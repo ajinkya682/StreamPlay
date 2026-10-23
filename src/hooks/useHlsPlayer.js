@@ -209,11 +209,19 @@ export function useHlsPlayer(videoRef) {
               return;
             }
 
+            const responseText = data.response?.text || '';
             let explanation = 'Unable to load stream playlist or video segments.';
-            if (httpStatus === 403) {
-              explanation = 'HTTP 403 Forbidden: The stream URL token may have expired or requires authorization.';
+            let customErrorHelp = '';
+
+            if (responseText.includes('Google-Edge-Cache') || responseText.includes('Upstream playlist error')) {
+              explanation = 'ClassX Video Token Expired (Google-Edge-Cache: Not Found).';
+              customErrorHelp = 'The video token from your ClassX / Ignite portal has expired (tokens typically expire after 10–15 minutes). Open your student portal, refresh your class video to generate a fresh link, and paste the new URL.';
+            } else if (httpStatus === 403) {
+              explanation = 'HTTP 403 Forbidden: The stream URL token has expired or requires authorization.';
+              customErrorHelp = 'Signed stream tokens are temporary. Open your portal and copy a fresh link generated right now.';
             } else if (httpStatus === 404) {
-              explanation = 'HTTP 404 Not Found: The stream playlist was not found at this address.';
+              explanation = 'HTTP 404 Not Found: The stream playlist was not found on the streaming server.';
+              customErrorHelp = 'The video server returned 404. If this is a live lecture or class recording, get a new link from your portal.';
             } else if (httpStatus === 0 || !httpStatus) {
               explanation = 'Network error or CORS restriction: The streaming server does not allow direct browser playback.';
             }
@@ -232,9 +240,9 @@ export function useHlsPlayer(videoRef) {
               setError({
                 title: 'Stream Connection Failed',
                 message: explanation,
-                help: isProxyActiveRef.current
-                  ? 'The proxy attempted to reach the streaming server, but the video link may be expired or invalid.'
-                  : 'Ensure today’s link is fresh and that the video token is valid.'
+                help: customErrorHelp || (isProxyActiveRef.current
+                  ? 'The proxy connected to the streaming server, but the link token has expired or is invalid.'
+                  : 'Ensure today’s link is fresh and that the video token is valid.')
               });
             }
             break;
