@@ -52,6 +52,57 @@ function buildUpstreamHeaders(targetUrl, customReferer, reqHeaders) {
   return headers;
 }
 
+async function tryResolveM3u8FromSegment(segmentUrl, headers) {
+  let urlObj;
+  try {
+    urlObj = new URL(segmentUrl);
+  } catch (e) {
+    return null;
+  }
+
+  const pathname = urlObj.pathname;
+  if (!pathname.toLowerCase().endsWith('.ts')) {
+    return null;
+  }
+
+  const candidates = [];
+  const sameDirMaster = pathname.replace(/\/[^/]+\.ts$/i, '/master.m3u8');
+  candidates.push(new URL(sameDirMaster + urlObj.search, urlObj.origin).toString());
+
+  const parentDirMaster = pathname.replace(/\/(?:[0-9]+p|hls|video|stream)\/[^/]+\.ts$/i, '/master.m3u8');
+  if (parentDirMaster !== sameDirMaster) {
+    candidates.push(new URL(parentDirMaster + urlObj.search, urlObj.origin).toString());
+  }
+
+  const sameDirIndex = pathname.replace(/\/[^/]+\.ts$/i, '/index.m3u8');
+  candidates.push(new URL(sameDirIndex + urlObj.search, urlObj.origin).toString());
+
+  const parentDirIndex = pathname.replace(/\/(?:[0-9]+p|hls|video|stream)\/[^/]+\.ts$/i, '/index.m3u8');
+  if (parentDirIndex !== sameDirIndex) {
+    candidates.push(new URL(parentDirIndex + urlObj.search, urlObj.origin).toString());
+  }
+
+  for (const cand of candidates) {
+    try {
+      const testRes = await fetch(cand, {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(3000)
+      });
+      if (testRes.ok) {
+        const text = await testRes.text();
+        if (text.includes('#EXTM3U')) {
+          return { resolvedUrl: cand, content: text };
+        }
+      }
+    } catch (e) {
+      // Ignore
+    }
+  }
+
+  return null;
+}
+
 export default async function handler(req, res) {
   // Global CORS headers for cross-origin player access
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -86,25 +137,62 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Missing target url query parameter' });
     }
 
-    try {
-      const customReferer = searchParams.get('referer') || req.query?.referer;
-      const headers = buildUpstreamHeaders(targetUrl, customReferer, req.headers);
+    const isSegment = /\.ts(\?.*)?$/i.test(targetUrl);
+    const customReferer = searchParams.get('referer') || req.query?.referer;
+    const headers = buildUpstreamHeaders(targetUrl, customReferer, req.headers);
 
+    // If user passed a .ts file, attempt to automatically resolve to .m3u8
+    if (isSegment) {
+      const resolved = await tryResolveM3u8FromSegment(targetUrl, headers);
+      if (resolved) {
+        const rewritten = rewriteM3u8Content(resolved.content, resolved.resolvedUrl);
+        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        return res.status(200).send(rewritten);
+      }
+    }
+
+    try {
       const upstreamRes = await fetch(targetUrl, {
         method: 'GET',
         headers,
-        redirect: 'follow'
+        redirect: 'follow',
+        signal: AbortSignal.timeout(9000)
       });
 
       if (!upstreamRes.ok) {
         const errText = await upstreamRes.text().catch(() => '');
+        let errorTitle = `Upstream playlist error (${upstreamRes.status})`;
+        let help = '';
+
+        if (isSegment) {
+          errorTitle = 'Video Segment (.ts) Entered';
+          help = 'You provided a temporary .ts video chunk instead of an .m3u8 playlist. HLS requires the master playlist. In your browser DevTools (Network tab), filter by "m3u8" to copy the master.m3u8 link.';
+        } else if (errText.includes('Google-Edge-Cache') || upstreamRes.status === 404) {
+          help = 'The stream token or playlist was not found on Google Edge Cache. Refresh your student portal to generate a fresh link.';
+        } else if (upstreamRes.status === 403) {
+          help = 'Access forbidden. The stream token has expired or is unauthorized.';
+        }
+
         return res.status(upstreamRes.status).json({
-          error: `Upstream playlist error (${upstreamRes.status})`,
-          details: errText || upstreamRes.statusText
+          error: errorTitle,
+          details: errText || upstreamRes.statusText,
+          isSegment,
+          help
         });
       }
 
       const playlistText = await upstreamRes.text();
+
+      if (!playlistText.includes('#EXTM3U') && isSegment) {
+        return res.status(400).json({
+          error: 'Video Segment (.ts) Entered',
+          details: 'The URL returned raw binary video instead of an M3U8 playlist manifest.',
+          isSegment: true,
+          help: 'You copied a .ts video segment chunk. HLS players need the master .m3u8 playlist file. In Chrome DevTools > Network tab, filter for "m3u8" and copy that link.'
+        });
+      }
+
       const finalBaseUrl = upstreamRes.url || targetUrl;
       const rewritten = rewriteM3u8Content(playlistText, finalBaseUrl);
 
@@ -112,7 +200,15 @@ export default async function handler(req, res) {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       return res.status(200).send(rewritten);
     } catch (err) {
-      return res.status(502).json({ error: `Proxy playlist failed: ${err.message}` });
+      const isTimeout = err.name === 'TimeoutError' || err.message?.includes('timeout');
+      return res.status(502).json({
+        error: isTimeout ? 'Stream Connection Timed Out' : `Proxy playlist failed: ${err.message}`,
+        details: err.message,
+        isSegment,
+        help: isSegment
+          ? 'You entered a .ts video segment. HLS requires the master.m3u8 playlist file.'
+          : 'The streaming server did not respond within 9 seconds. Verify the stream is online or check your token.'
+      });
     }
   }
 

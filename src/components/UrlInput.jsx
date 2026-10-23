@@ -238,6 +238,31 @@ export function UrlInput({ currentUrl, onPlay, onStop, isPlaying, isLoading }) {
         </button>
       </form>
 
+      {url.trim().toLowerCase().includes('.ts') && (
+        <div style={{
+          background: 'rgba(234, 179, 8, 0.12)',
+          border: '1px solid rgba(234, 179, 8, 0.35)',
+          borderRadius: '8px',
+          padding: '10px 14px',
+          fontSize: '0.8125rem',
+          color: '#fef08a',
+          marginTop: '-4px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '4px'
+        }}>
+          <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span>⚠️ Video Fragment (.ts) URL Detected</span>
+          </div>
+          <div style={{ lineHeight: 1.4, color: '#fef9c3' }}>
+            You entered an individual <code>.ts</code> video chunk. HLS players need the stream's <strong>.m3u8 playlist</strong> (e.g. <code>master.m3u8</code>). StreamPlay will attempt to auto-resolve to the playlist when you click Play.
+          </div>
+          <div style={{ fontSize: '0.75rem', color: '#fde047' }}>
+            💡 <strong>How to find it:</strong> In browser DevTools (Network tab), filter by <code>m3u8</code> to find and copy the master playlist link.
+          </div>
+        </div>
+      )}
+
       {validationError && (
         <div style={{ color: 'var(--danger)', fontSize: '0.8125rem', marginTop: '-4px' }}>
           ⚠️ {validationError}

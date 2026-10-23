@@ -155,10 +155,15 @@ export function useHlsPlayer(videoRef) {
         } else {
           cleanup();
           setStatus('error');
+          const isTsSegment = trimmedUrl.toLowerCase().includes('.ts');
           setError({
-            title: 'Stream Loading Timed Out',
-            message: 'The stream took too long to connect or the server is unresponsive.',
-            help: 'Check if the link token is still active, or try pasting the raw M3U8 content.'
+            title: isTsSegment ? 'Video Segment (.ts) Entered' : 'Stream Loading Timed Out',
+            message: isTsSegment
+              ? 'You entered a temporary .ts video chunk rather than an HLS stream playlist (.m3u8).'
+              : 'The stream took too long to connect or the server is unresponsive.',
+            help: isTsSegment
+              ? 'HLS players require the master .m3u8 playlist file. In your browser DevTools (Network tab), filter by "m3u8" to copy the master.m3u8 link.'
+              : 'Check if the link token is still active, or try pasting the raw M3U8 content.'
           });
         }
       }, 12000);
@@ -211,24 +216,58 @@ export function useHlsPlayer(videoRef) {
               return;
             }
 
+            // Immediately clear the watchdog timeout so it does not overwrite the real network error
+            if (loadingTimeoutRef.current) {
+              clearTimeout(loadingTimeoutRef.current);
+              loadingTimeoutRef.current = null;
+            }
+
             const responseText = data.response?.text || '';
+            let jsonResponse = null;
+            try {
+              jsonResponse = JSON.parse(responseText);
+            } catch (e) {}
+
+            const isTsSegment = trimmedUrl.toLowerCase().includes('.ts');
+            let errorTitle = 'Stream Connection Failed';
             let explanation = 'Unable to load stream playlist or video segments.';
             let customErrorHelp = '';
 
-            if (responseText.includes('Google-Edge-Cache') || responseText.includes('Upstream playlist error')) {
-              explanation = 'ClassX Video Token Expired (Google-Edge-Cache: Not Found).';
-              customErrorHelp = 'The video token from your ClassX / Ignite portal has expired (tokens typically expire after 10–15 minutes). Open your student portal, refresh your class video to generate a fresh link, and paste the new URL.';
+            if (jsonResponse?.help) {
+              explanation = jsonResponse.details || jsonResponse.error || explanation;
+              customErrorHelp = jsonResponse.help;
+              if (jsonResponse.isSegment || isTsSegment) {
+                errorTitle = 'Video Segment (.ts) Entered';
+              }
+            } else if (isTsSegment) {
+              errorTitle = 'Video Segment (.ts) Entered';
+              explanation = 'You entered a .ts video chunk rather than an HLS stream playlist (.m3u8).';
+              customErrorHelp = 'HLS players require an .m3u8 playlist file (e.g. master.m3u8). Open your browser DevTools (Network tab), filter by "m3u8", and copy the master playlist URL.';
+            } else if (responseText.includes('Google-Edge-Cache') || responseText.includes('Upstream playlist error')) {
+              errorTitle = 'ClassX Stream Error (Google-Edge-Cache)';
+              explanation = 'ClassX Video Token Expired or Not Found (Google-Edge-Cache).';
+              customErrorHelp = 'The video token or segment has expired. Open your student portal, refresh your class video to generate a fresh link, and copy the new master.m3u8 URL.';
+            } else if (responseText.includes('Invalid signed request')) {
+              errorTitle = 'Invalid Token Signature';
+              explanation = 'Google Edge Cache rejected the token signature for this URL.';
+              customErrorHelp = 'Ensure you copied the entire URL including all query parameters (?edge-cache-token=...). Refresh the video in your student portal for a fresh link.';
             } else if (httpStatus === 403) {
-              explanation = 'HTTP 403 Forbidden: The stream URL token has expired or requires authorization.';
+              errorTitle = 'HTTP 403 Forbidden';
+              explanation = 'The stream URL token has expired or requires authorization.';
               customErrorHelp = 'Signed stream tokens are temporary. Open your portal and copy a fresh link generated right now.';
             } else if (httpStatus === 404) {
-              explanation = 'HTTP 404 Not Found: The stream playlist was not found on the streaming server.';
-              customErrorHelp = 'The video server returned 404. If this is a live lecture or class recording, get a new link from your portal.';
+              errorTitle = 'HTTP 404 Not Found';
+              explanation = 'The stream playlist or segment was not found on the streaming server.';
+              customErrorHelp = 'The video server returned 404. If this is a live lecture or class recording, refresh your portal to get a fresh link.';
             } else if (httpStatus === 0 || !httpStatus) {
               explanation = 'Network error or CORS restriction: The streaming server does not allow direct browser playback.';
+              customErrorHelp = 'Make sure the local proxy server is running or try pasting the raw M3U8 content.';
             }
 
-            if (retryCountRef.current < maxRetries) {
+            // HTTP 4xx client errors (400, 403, 404) are non-recoverable — retrying the exact same URL will never succeed
+            const isNonRecoverable = (httpStatus >= 400 && httpStatus < 500) || isTsSegment;
+
+            if (!isNonRecoverable && retryCountRef.current < maxRetries) {
               retryCountRef.current += 1;
               if (data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) {
                 const src = isProxyActiveRef.current ? `/api/proxy/playlist?url=${encodeURIComponent(trimmedUrl)}` : trimmedUrl;
@@ -240,7 +279,7 @@ export function useHlsPlayer(videoRef) {
               cleanup();
               setStatus('error');
               setError({
-                title: 'Stream Connection Failed',
+                title: errorTitle,
                 message: explanation,
                 help: customErrorHelp || (isProxyActiveRef.current
                   ? 'The proxy connected to the streaming server, but the link token has expired or is invalid.'
